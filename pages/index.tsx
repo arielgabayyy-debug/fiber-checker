@@ -1,272 +1,267 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
 
-const PROVIDERS = {
-  bezeq: { label: 'Bezeq', color: '#3b82f6' },
-  hot: { label: 'HOT', color: '#ef4444' },
-  cellcom: { label: 'סלקום', color: '#a855f7' },
-  yes: { label: 'yes', color: '#60a5fa' },
-}
+const PROVIDERS = [
+  { id: 'bezeq', label: 'בזק', icon: '📡', color: '#e84355',
+    url: (c,s,n) => `https://www.bezeq.co.il/internetandphone/internet/bfiber_addresscheck/?city=${enc(c)}&street=${enc(s)}&num=${enc(n)}` },
+  { id: 'hot', label: 'HOT', icon: '🔥', color: '#f5600a',
+    url: (c,s,n) => `https://www.hot.net.il/heb/internet/fiber-check/?city=${enc(c)}&street=${enc(s)}&house=${enc(n)}` },
+  { id: 'partner', label: 'פרטנר', icon: '🌐', color: '#1a5fb4',
+    url: (c,s,n) => `https://www.partner.co.il/internet/fiber/?city=${enc(c)}&street=${enc(s)}&num=${enc(n)}` },
+  { id: 'cellcom', label: 'סלקום', icon: '📶', color: '#00a651',
+    url: (c,s,n) => `https://www.cellcom.co.il/sale/jet/internet_ktovet/?city=${enc(c)}&street=${enc(s)}&num=${enc(n)}` },
+]
+const enc = (s) => encodeURIComponent(s || '')
 
-function useAC(apiPath) {
-  const [query, setQuery] = useState('')
+function useAC(apiPath, extra = {}) {
+  const [q, setQ] = useState('')
   const [items, setItems] = useState([])
   const [open, setOpen] = useState(false)
   const [idx, setIdx] = useState(-1)
   const timer = useRef(null)
 
-  const doFetch = useCallback((q, extra) => {
-    if (!q || q.length < 1) { setItems([]); setOpen(false); return }
-    const params = new URLSearchParams({ q, ...(extra || {}) })
-    fetch(apiPath + '?' + params)
-      .then(r => r.json())
-      .then(data => {
-        const list = data.cities || data.streets || []
-        setItems(list)
+  const fetch_ = useCallback((val) => {
+    if (!val || val.length < 2) { setItems([]); setOpen(false); return }
+    clearTimeout(timer.current)
+    timer.current = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q: val, ...extra })
+        const r = await fetch(apiPath + '?' + params)
+        const d = await r.json()
+        const list = d.cities || d.streets || []
+        setItems(list.slice(0, 8))
         setOpen(list.length > 0)
         setIdx(-1)
-      })
-      .catch(() => { setItems([]); setOpen(false) })
-  }, [apiPath])
+      } catch { setItems([]); setOpen(false) }
+    }, 280)
+  }, [apiPath, JSON.stringify(extra)])
 
-  const onChange = (val, extra) => {
-    setQuery(val)
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(() => doFetch(val, extra), 200)
-  }
-
-  const onKeyDown = (e, onSelect) => {
+  const onKey = (e, onSelect) => {
     if (!open) return
     if (e.key === 'ArrowDown') { e.preventDefault(); setIdx(i => Math.min(i + 1, items.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)) }
-    else if (e.key === 'Enter' && idx >= 0) { e.preventDefault(); onSelect(items[idx]); setOpen(false) }
-    else if (e.key === 'Escape') setOpen(false)
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setIdx(i => Math.max(i - 1, -1)) }
+    if (e.key === 'Enter' && idx >= 0) { e.preventDefault(); onSelect(items[idx]); setOpen(false) }
+    if (e.key === 'Escape') setOpen(false)
   }
 
-  return { query, setQuery, items, open, setOpen, idx, onChange, onKeyDown }
+  return { q, setQ: (v) => { setQ(v); fetch_(v) }, items, open, setOpen, idx, onKey }
 }
 
 export default function Home() {
   const city = useAC('/api/cities')
-  const street = useAC('/api/streets')
+  const [cityVal, setCityVal] = useState('')
+  const street = useAC('/api/streets', { city: cityVal })
+  const [streetVal, setStreetVal] = useState('')
   const [num, setNum] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
-  const [error, setError] = useState('')
-  const [cityErr, setCityErr] = useState(false)
-  const [streetErr, setStreetErr] = useState(false)
-  const resultsRef = useRef(null)
-  const streetRef = useRef(null)
 
-  useEffect(() => {
-    street.setQuery('')
-    street.setOpen(false)
-  }, [city.query]) // eslint-disable-line
+  const selectCity = (v) => { setCityVal(v); city.setQ(v); city.setOpen(false); setStreetVal(''); street.setQ('') }
+  const selectStreet = (v) => { setStreetVal(v); street.setQ(v); street.setOpen(false) }
 
   const check = async () => {
-    let hasErr = false
-    if (!city.query.trim()) { setCityErr(true); hasErr = true; setTimeout(() => setCityErr(false), 1500) }
-    if (!street.query.trim()) { setStreetErr(true); hasErr = true; setTimeout(() => setStreetErr(false), 1500) }
-    if (hasErr) return
-    setLoading(true); setResult(null); setError('')
+    if (!cityVal || !streetVal) return
+    setLoading(true); setResult(null)
     try {
-      const p = new URLSearchParams({ city: city.query.trim(), street: street.query.trim(), num: num.trim() })
-      const r = await fetch('/api/check?' + p)
-      const data = await r.json()
-      setResult(data)
-      setTimeout(() => resultsRef.current && resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100)
-    } catch (e) {
-      setError('שגיאת חיבור — נסה שוב')
-    } finally {
-      setLoading(false)
-    }
+      const r = await fetch(`/api/check?city=${enc(cityVal)}&street=${enc(streetVal)}&num=${enc(num)}`)
+      const d = await r.json()
+      setResult(d)
+    } catch { setResult({ error: true }) }
+    finally { setLoading(false) }
   }
 
-  const selCity = (v) => { city.setQuery(v); city.setOpen(false); if (streetRef.current) streetRef.current.focus() }
-  const selStreet = (v) => { street.setQuery(v); street.setOpen(false) }
-
-  const S = {
-    page: { minHeight: '100vh', position: 'relative' },
-    blob1: { position: 'fixed', top: -200, right: -200, width: 700, height: 700, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,245,160,0.05) 0%,transparent 70%)', pointerEvents: 'none' },
-    blob2: { position: 'fixed', bottom: -150, left: -150, width: 600, height: 600, borderRadius: '50%', background: 'radial-gradient(circle,rgba(79,142,247,0.06) 0%,transparent 70%)', pointerEvents: 'none' },
-    wrap: { maxWidth: 600, margin: '0 auto', padding: '32px 16px 60px', position: 'relative', zIndex: 1 },
-    badge: { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(0,245,160,0.08)', border: '1px solid rgba(0,245,160,0.2)', borderRadius: 100, padding: '5px 14px', fontSize: 10, fontWeight: 700, color: '#00f5a0', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 20 },
-    dot: { width: 6, height: 6, borderRadius: '50%', background: '#00f5a0', display: 'inline-block' },
-    h1: { fontFamily: 'Orbitron,monospace', fontSize: 'clamp(24px,5vw,36px)', fontWeight: 900, color: 'white', lineHeight: 1.2, marginBottom: 10 },
-    sub: { fontSize: 15, color: '#6b7a9e', fontWeight: 300 },
-    stats: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 20 },
-    statNum: { fontFamily: 'Orbitron,monospace', fontSize: 20, fontWeight: 900, color: '#00f5a0', textShadow: '0 0 20px rgba(0,245,160,0.4)', marginBottom: 4 },
-    statLbl: { fontSize: 11, color: '#6b7a9e', fontWeight: 600 },
-    lbl: { fontSize: 10, fontWeight: 700, color: '#6b7a9e', letterSpacing: 2, textTransform: 'uppercase', display: 'block', marginBottom: 8 },
-    addrRow: { display: 'grid', gridTemplateColumns: '1fr 90px', gap: 10 },
-    numInput: { textAlign: 'center' },
-    quickRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 },
-    callBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '13px', borderRadius: 13, textDecoration: 'none', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.22)', color: '#ff3b6b', fontSize: 14, fontWeight: 700 },
-    waBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '13px', borderRadius: 13, textDecoration: 'none', background: 'rgba(37,211,102,.08)', border: '1px solid rgba(37,211,102,.22)', color: '#25d366', fontSize: 14, fontWeight: 700 },
-    divRow: { display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0' },
-    divLine: { flex: 1, height: 1, background: '#1a2035' },
-    divTxt: { fontSize: 11, color: '#2d3a55', fontWeight: 700, letterSpacing: 1 },
-    pgrid: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 20 },
-    note: { padding: '16px 18px', display: 'flex', alignItems: 'flex-start', gap: 12, border: '1px solid rgba(79,142,247,.15)', background: 'rgba(79,142,247,.04)' },
-  }
+  const addr = [cityVal, streetVal, num].filter(Boolean).join(' ')
 
   return (
     <>
-      <Head><title>בדיקת זמינות סיבים | ניתוק וחיבור בקליק</title></Head>
-      <div className="grid-bg" style={S.page}>
-        <div style={S.blob1}/>
-        <div style={S.blob2}/>
-        <div style={S.wrap}>
-          <div style={{ textAlign: 'center', paddingBottom: 36 }}>
-            <div style={S.badge}><span className="animate-blink" style={S.dot}/>FIBER DETECTOR</div>
-            <h1 style={S.h1}>יש <span className="text-glow-green" style={{ color: '#00f5a0' }}>סיב</span> בכתובת שלך?</h1>
-            <p style={S.sub}>בדיקה אמיתית ומיידית אצל כל הספקים — חינם</p>
+      <Head>
+        <title>בדיקת זמינות סיבים | ניתוק וחיבור בקליק</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+      </Head>
+
+      <div className="page">
+        <div className="wrap">
+          {/* Header */}
+          <div className="header">
+            <div className="badge">⚡ ניתוק וחיבור בקליק</div>
+            <h1>בדוק זמינות <span>סיבים</span><br/>בכתובת שלך</h1>
+            <p>בדיקה מיידית אצל כל הספקים — בזק, HOT, פרטנר, סלקום</p>
           </div>
 
-          <div style={S.stats}>
-            {[{n:'4',l:'ספקים נבדקים'},{n:'⚡',l:'תוצאה מיידית'},{n:'100%',l:'חינמי לחלוטין'}].map((s,i) => (
-              <div key={i} className="fiber-card" style={{ padding: '16px 12px', textAlign: 'center' }}>
-                <div style={S.statNum}>{s.n}</div>
-                <div style={S.statLbl}>{s.l}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="fiber-card" style={{ padding: '28px 24px', marginBottom: 14, position: 'relative' }}>
-            {loading && <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}><div className="scan-line"/></div>}
-
-            <div style={{ marginBottom: 16 }}>
-              <label style={S.lbl}>עיר</label>
-              <div style={{ position: 'relative' }}>
-                <input className={'fiber-input' + (cityErr ? ' error' : '')} placeholder="הקלד שם עיר..." value={city.query} autoComplete="off"
-                  onChange={e => city.onChange(e.target.value)}
-                  onKeyDown={e => city.onKeyDown(e, selCity)}
-                  onBlur={() => setTimeout(() => city.setOpen(false), 150)}
-                  onFocus={() => city.items.length > 0 && city.setOpen(true)} />
-                {city.open && city.items.length > 0 && (
-                  <div className="ac-dropdown">
-                    {city.items.map((item, i) => (
-                      <div key={item} className={'ac-item' + (i === city.idx ? ' active' : '')} onMouseDown={() => selCity(item)}>
-                        <span style={{ fontSize: 12, opacity: .5 }}>📍</span>{item}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 20 }}>
-              <label style={S.lbl}>כתובת</label>
-              <div style={S.addrRow}>
-                <div style={{ position: 'relative' }}>
-                  <input ref={streetRef} className={'fiber-input' + (streetErr ? ' error' : '')} placeholder="שם הרחוב" value={street.query} autoComplete="off"
-                    onChange={e => street.onChange(e.target.value, city.query ? { city: city.query } : {})}
-                    onKeyDown={e => street.onKeyDown(e, selStreet)}
-                    onBlur={() => setTimeout(() => street.setOpen(false), 150)}
-                    onFocus={() => street.items.length > 0 && street.setOpen(true)} />
-                  {street.open && street.items.length > 0 && (
-                    <div className="ac-dropdown">
-                      {street.items.map((item, i) => (
-                        <div key={item} className={'ac-item' + (i === street.idx ? ' active' : '')} onMouseDown={() => selStreet(item)}>
-                          <span style={{ fontSize: 12, opacity: .5 }}>🛣️</span>{item}
-                        </div>
+          {/* Search card */}
+          <div className="card">
+            <div className="label">כתובת לבדיקה</div>
+            <div className="row">
+              {/* City */}
+              <div className="field" style={{flex:2}}>
+                <label>עיר</label>
+                <div className="ac-wrap">
+                  <input
+                    value={city.q}
+                    onChange={e => { city.setQ(e.target.value); setCityVal(e.target.value) }}
+                    onKeyDown={e => city.onKey(e, selectCity)}
+                    onBlur={() => setTimeout(() => city.setOpen(false), 150)}
+                    placeholder="נהריה, חיפה..."
+                    className="inp"
+                    autoComplete="off"
+                  />
+                  {city.open && (
+                    <ul className="dd">
+                      {city.items.map((item, i) => (
+                        <li key={item} className={'ddi' + (i === city.idx ? ' active' : '')}
+                          onMouseDown={() => selectCity(item)}>{item}</li>
                       ))}
-                    </div>
+                    </ul>
                   )}
                 </div>
-                <input className="fiber-input" placeholder="מס׳" value={num} onChange={e => setNum(e.target.value)} onKeyDown={e => e.key === 'Enter' && check()} style={S.numInput} />
+              </div>
+              {/* Street */}
+              <div className="field" style={{flex:2}}>
+                <label>רחוב</label>
+                <div className="ac-wrap">
+                  <input
+                    value={street.q}
+                    onChange={e => { street.setQ(e.target.value); setStreetVal(e.target.value) }}
+                    onKeyDown={e => street.onKey(e, selectStreet)}
+                    onBlur={() => setTimeout(() => street.setOpen(false), 150)}
+                    placeholder="בק ליאו..."
+                    className="inp"
+                    autoComplete="off"
+                  />
+                  {street.open && (
+                    <ul className="dd">
+                      {street.items.map((item, i) => (
+                        <li key={item} className={'ddi' + (i === street.idx ? ' active' : '')}
+                          onMouseDown={() => selectStreet(item)}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+              {/* Number */}
+              <div className="field" style={{flex:'0 0 80px'}}>
+                <label>מס׳</label>
+                <input value={num} onChange={e => setNum(e.target.value)}
+                  placeholder="64" className="inp" inputMode="numeric" />
               </div>
             </div>
 
-            <button className="btn-primary" onClick={check} disabled={loading}>
-              {loading
-                ? <><span className="animate-spin" style={{ width: 18, height: 18, border: '2.5px solid rgba(2,26,14,.3)', borderTopColor: '#021a0e', borderRadius: '50%', display: 'inline-block' }} />סורק...</>
-                : <><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="2.2"/><path d="m21 21-4.35-4.35" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></svg>סרוק זמינות סיבים</>
-              }
+            {loading && <div className="scan-bar"><div className="scan-fill" /></div>}
+
+            <button className={'btn-check' + (loading ? ' loading' : '')} onClick={check} disabled={loading || !cityVal || !streetVal}>
+              {loading ? <><span className="spin" />בודק...</> : <>🔍&nbsp; סרוק זמינות סיבים</>}
             </button>
-            {error && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 10, background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.2)', color: '#ff3b6b', fontSize: 13, textAlign: 'center' }}>{error}</div>}
+
+            <div className="contact-row">
+              <a href="https://wa.me/972505037537" className="btn-wa" target="_blank" rel="noopener">💬 WhatsApp</a>
+              <a href="tel:050-503-7537" className="btn-call">📞 050-503-7537</a>
+            </div>
           </div>
 
-          <div style={S.quickRow}>
-            <a href="tel:0505037537" style={S.callBtn}>📞 050-503-7537</a>
-            <a href="https://wa.me/9720505037537" target="_blank" rel="noopener noreferrer" style={S.waBtn}>💬 WhatsApp</a>
-          </div>
-
+          {/* Results */}
           {result && (
-            <div ref={resultsRef} className="animate-result">
-              {result.bezeq_checked && (
-                <div className="fiber-card" style={{ padding: '24px', marginBottom: 16, border: result.bezeq_available ? '1.5px solid rgba(0,245,160,.3)' : '1.5px solid rgba(255,59,107,.3)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                    <div style={{ width: 60, height: 60, borderRadius: '50%', flexShrink: 0, background: result.bezeq_available ? 'rgba(0,245,160,.1)' : 'rgba(255,59,107,.1)', border: result.bezeq_available ? '2px solid rgba(0,245,160,.3)' : '2px solid rgba(255,59,107,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26 }}>
-                      {result.bezeq_available ? '✅' : '❌'}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 20, fontWeight: 900, color: result.bezeq_available ? '#00f5a0' : '#ff3b6b', marginBottom: 4 }}>
-                        {result.bezeq_available ? 'יש סיב אופטי!' : 'אין סיב בכתובת זו'}
-                      </div>
-                      <div style={{ fontSize: 13, color: '#6b7a9e' }}>
-                        {result.city}{result.street && ', ' + result.street}{result.num && ' ' + result.num} &bull; נבדק ב-Bezeq
-                      </div>
-                    </div>
-                  </div>
-                  {!result.bezeq_available && (
-                    <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 12, background: 'rgba(255,59,107,.06)', border: '1px solid rgba(255,59,107,.15)', fontSize: 13, color: '#6b7a9e', lineHeight: 1.6 }}>
-                      💡 <strong style={{ color: '#e2e8f0' }}>לא נורא!</strong> בדוק אצל שאר הספקים למטה, או <a href="tel:0505037537" style={{ color: '#00f5a0', textDecoration: 'none' }}>צלצל אלינו</a>.
-                    </div>
-                  )}
-                </div>
+            <div className="card result-card">
+              <div className="result-top">
+                <div className="label">תוצאות</div>
+                <div className="addr-line">{addr}</div>
+              </div>
+
+              {result.bezeq_available === true && (
+                <div className="alert ok">✅ <strong>מעולה!</strong> יש זמינות סיבים בבזק בכתובת זו!</div>
               )}
-              <div className="fiber-card" style={{ padding: '20px 20px 10px' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7a9e', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  בדוק ישירות אצל הספק<div style={{ flex: 1, height: 1, background: '#1a2035' }} />
-                </div>
-                {result.providers && result.providers.map(p => (
-                  <a key={p.provider} href={p.url} target="_blank" rel="noopener noreferrer" className="provider-row">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: PROVIDERS[p.provider] ? PROVIDERS[p.provider].color : '#fff' }}>
-                        {PROVIDERS[p.provider] ? PROVIDERS[p.provider].label : p.provider}
-                      </span>
-                      <span style={{ fontSize: 12, color: '#6b7a9e' }}>
-                        {p.provider === 'bezeq' && p.available !== null ? (p.available ? '✅ זמין' : '❌ לא זמין') : 'לחץ לבדיקה'}
-                      </span>
-                    </div>
-                    <div className="arrow">→</div>
-                  </a>
-                ))}
+              {result.bezeq_available === false && (
+                <div className="alert no">❌ <strong>אין סיב</strong> אצל בזק — בדוק ספקים אחרים למטה</div>
+              )}
+              {result.bezeq_available === null && (
+                <div className="alert info">🔍 לחץ על ספק לבדיקה ישירה באתר שלו</div>
+              )}
+
+              <div className="providers">
+                {PROVIDERS.map(p => {
+                  const av = result[p.id + '_available']
+                  const cls = av === true ? 'pcard avail' : av === false ? 'pcard nope' : 'pcard pending'
+                  return (
+                    <a key={p.id} href={p.url(cityVal, streetVal, num)} target="_blank" rel="noopener" className={cls}>
+                      <div className="p-bar" style={{background: p.color}} />
+                      <div className="p-icon">{p.icon}</div>
+                      <div className="p-name">{p.label}</div>
+                      <div className={`p-status ${av === true ? 's-ok' : av === false ? 's-no' : 's-chk'}`}>
+                        {av === true ? '✓ זמין' : av === false ? '✗ לא זמין' : 'לחץ לבדיקה ↗'}
+                      </div>
+                    </a>
+                  )
+                })}
+              </div>
+
+              <div className="help-box">
+                💡 לא נורא! בדוק אצל שאר הספקים, או <a href="https://wa.me/972505037537" target="_blank" rel="noopener"><strong>צלצל אלינו</strong></a> — נמצא לך את הטוב ביותר.
               </div>
             </div>
           )}
 
-          {!result && (
-            <>
-              <div style={S.divRow}>
-                <div style={S.divLine}/><span style={S.divTxt}>בחר ספק ספציפי</span><div style={S.divLine}/>
-              </div>
-              <div style={S.pgrid}>
-                {[
-                  { k: 'bezeq', url: 'https://www.bezeq.co.il/internetandphone/internet/bfiber_addresscheck/' },
-                  { k: 'hot', url: 'https://www.hot.net.il/heb/internet/fiber-check/' },
-                  { k: 'cellcom', url: 'https://cellcom.co.il/sale/jet/internet_ktovet/' },
-                  { k: 'yes', url: 'https://www.yes.co.il/internet/fiber-address-check/' },
-                ].map(({ k, url }) => (
-                  <a key={k} href={url} target="_blank" rel="noopener noreferrer"
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '16px 8px', background: '#0f1422', borderRadius: 14, border: '1px solid #1a2035', textDecoration: 'none' }}>
-                    <span style={{ fontSize: 15, fontWeight: 900, color: PROVIDERS[k].color }}>{PROVIDERS[k].label}</span>
-                  </a>
-                ))}
-              </div>
-            </>
-          )}
-
-          <div className="fiber-card" style={S.note}>
-            <span style={{ fontSize: 18, flexShrink: 0 }}>🎉</span>
-            <p style={{ fontSize: 13, color: '#6b7a9e', lineHeight: 1.7, margin: 0 }}>
-              מצאת חבילה? <strong style={{ color: '#93c5fd' }}>ניתוק וחיבור בקליק</strong> מטפלים בניתוק ובחיבור — חינם!{' '}
-              <a href="tel:0505037537" style={{ color: '#00f5a0', textDecoration: 'none', fontWeight: 700 }}>📞 050-503-7537</a>
-            </p>
-          </div>
+          <div className="footer">שירות חינמי מבית <strong>ניתוק וחיבור בקליק</strong> · 050-503-7537</div>
         </div>
       </div>
+
+      <style>{`
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'Rubik',sans-serif;background:#eef2ff;color:#1a1f3a;min-height:100vh}
+        .page{padding:32px 16px 60px;display:flex;justify-content:center}
+        .wrap{width:100%;max-width:580px}
+        .header{text-align:center;margin-bottom:28px}
+        .badge{display:inline-flex;align-items:center;gap:6px;background:#e0e8ff;color:#3a5cf5;font-weight:600;font-size:13px;padding:5px 14px;border-radius:999px;margin-bottom:14px}
+        h1{font-size:28px;font-weight:800;line-height:1.2;margin-bottom:8px} h1 span{color:#3a5cf5}
+        .header p{color:#5a6282;font-size:15px}
+        .card{background:#fff;border-radius:18px;box-shadow:0 4px 28px rgba(58,92,245,.09);border:1px solid #dde4f7;padding:26px;margin-bottom:14px}
+        .label{font-size:11px;font-weight:700;color:#8892b0;letter-spacing:.9px;text-transform:uppercase;margin-bottom:12px}
+        .row{display:flex;gap:10px;flex-wrap:wrap}
+        .field{display:flex;flex-direction:column;position:relative}
+        .field label{font-size:12px;font-weight:500;color:#5a6282;margin-bottom:5px}
+        .inp{width:100%;padding:11px 13px;border:1.5px solid #dde4f7;border-radius:10px;font-family:'Rubik',sans-serif;font-size:15px;color:#1a1f3a;background:#f8faff;outline:none;transition:border-color .2s,box-shadow .2s;text-align:right}
+        .inp::placeholder{color:#b0bcd8}
+        .inp:focus{border-color:#3a5cf5;box-shadow:0 0 0 3px rgba(58,92,245,.1);background:#fff}
+        .ac-wrap{position:relative}
+        .dd{position:absolute;top:calc(100% + 4px);right:0;left:0;background:#fff;border:1.5px solid #dde4f7;border-radius:10px;box-shadow:0 8px 30px rgba(58,92,245,.13);z-index:999;max-height:200px;overflow-y:auto;list-style:none;padding:4px 0}
+        .ddi{padding:9px 13px;cursor:pointer;font-size:14px;color:#1a1f3a;transition:background .12s}
+        .ddi:hover,.ddi.active{background:#eef2ff;color:#3a5cf5}
+        .scan-bar{height:3px;background:#eef2ff;border-radius:99px;margin:14px 0;overflow:hidden}
+        .scan-fill{height:100%;width:40%;background:linear-gradient(90deg,transparent,#3a5cf5,transparent);animation:scan 1.2s ease-in-out infinite;border-radius:99px}
+        @keyframes scan{0%{transform:translateX(250%)}100%{transform:translateX(-250%)}}
+        .btn-check{width:100%;padding:14px;background:#3a5cf5;color:#fff;border:none;border-radius:10px;font-family:'Rubik',sans-serif;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background .2s,transform .15s,box-shadow .2s;margin-top:8px;box-shadow:0 4px 18px rgba(58,92,245,.28)}
+        .btn-check:hover:not(:disabled){background:#2a4ae0;box-shadow:0 6px 24px rgba(58,92,245,.38);transform:translateY(-1px)}
+        .btn-check:disabled{background:#c0caf5;box-shadow:none;cursor:not-allowed}
+        .spin{width:17px;height:17px;border:2.5px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .contact-row{display:flex;gap:10px;margin-top:12px}
+        .btn-wa{flex:1;padding:11px;background:#25d366;color:#fff;border:none;border-radius:10px;font-family:'Rubik',sans-serif;font-size:14px;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px;transition:opacity .2s}
+        .btn-call{flex:1;padding:11px;background:#eef2ff;color:#3a5cf5;border:none;border-radius:10px;font-family:'Rubik',sans-serif;font-size:14px;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px;transition:opacity .2s}
+        .btn-wa:hover,.btn-call:hover{opacity:.85}
+        .result-card{margin-top:4px}
+        .result-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+        .addr-line{font-size:14px;font-weight:600;color:#1a1f3a;background:#f0f4ff;padding:5px 12px;border-radius:8px}
+        .alert{padding:12px 15px;border-radius:10px;font-size:14px;margin-bottom:14px}
+        .alert.ok{background:#e8faf4;color:#007a52;border:1px solid #b8f0db}
+        .alert.no{background:#fff0f2;color:#c0293a;border:1px solid #ffd0d6}
+        .alert.info{background:#eef2ff;color:#3a5cf5;border:1px solid #d0d9ff}
+        .providers{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+        .pcard{border:1.5px solid #dde4f7;border-radius:12px;padding:16px 12px;text-align:center;background:#f8faff;text-decoration:none;display:block;position:relative;overflow:hidden;transition:box-shadow .2s,transform .15s;cursor:pointer}
+        .pcard:hover{box-shadow:0 6px 20px rgba(58,92,245,.12);transform:translateY(-2px)}
+        .pcard.avail{border-color:#b8f0db;background:#e8faf4}
+        .pcard.nope{border-color:#ffd0d6;background:#fff0f2}
+        .pcard.pending{border-color:#d0d9ff;background:#eef2ff}
+        .p-bar{height:3px;position:absolute;top:0;right:0;left:0;border-radius:99px}
+        .p-icon{font-size:22px;margin:8px 0 6px}
+        .p-name{font-size:15px;font-weight:700;color:#1a1f3a;margin-bottom:5px}
+        .p-status{font-size:12px;font-weight:600}
+        .s-ok{color:#00b87c} .s-no{color:#e84355} .s-chk{color:#3a5cf5}
+        .help-box{background:#fffbf0;border:1px solid #ffe5b0;border-radius:10px;padding:13px 15px;font-size:13px;color:#7a5500}
+        .help-box a{color:#e67e00}
+        .footer{text-align:center;font-size:12px;color:#8892b0;margin-top:20px}
+        .footer strong{color:#5a6282}
+        @media(max-width:400px){.row{flex-wrap:wrap}.field[style*="flex:2"]{flex:1 1 120px!important}}
+      `}</style>
     </>
   )
-}
+          }
