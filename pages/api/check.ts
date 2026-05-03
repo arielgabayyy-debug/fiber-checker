@@ -1,44 +1,82 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-function enc(s: string) { return encodeURIComponent(s) }
+const enc = (s: string) => encodeURIComponent(s || '')
 
 async function checkBezeq(city: string, street: string, num: string) {
-  try {
-    const url = 'https://www.bezeq.co.il/umbraco/surface/BfibreAddressCheck/CheckAddress?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num)
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json,*/*', 'Referer': 'https://www.bezeq.co.il/', 'Origin': 'https://www.bezeq.co.il' },
-      signal: AbortSignal.timeout(8000),
-    })
-    const text = await r.text()
-    let available = false
+  const endpoints = [
+    'https://www.bezeq.co.il/umbraco/Surface/FiberAddress/CheckAddress?cityName=' + enc(city) + '&streetName=' + enc(street) + '&houseNum=' + enc(num),
+    'https://www.bezeq.co.il/umbraco/Api/FiberAddress/CheckAddress?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num),
+  ]
+  for (const url of endpoints) {
     try {
-      const json = JSON.parse(text)
-      if (typeof json === 'boolean') available = json
-      else if (typeof json === 'object' && json !== null) {
-        available = !!(json.IsAvailable || json.isAvailable || json.Available || json.available || json.isFiberAvailable)
+      const r = await fetch(url, {
+        signal: AbortSignal.timeout(7000),
+        headers: {
+          'Referer': 'https://www.bezeq.co.il/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+
+const enc = (s: string) => encodeURIComponent(s || '')
+
+async function checkBezeq(city: string, street: string, num: string) {
+  const endpoints = [
+    'https://www.bezeq.co.il/umbraco/Surface/FiberAddress/CheckAddress?cityName=' + enc(city) + '&streetName=' + enc(street) + '&houseNum=' + enc(num),
+    'https://www.bezeq.co.il/umbraco/Api/FiberAddress/CheckAddress?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num),
+  ]
+  for (const url of endpoints) {
+    try {
+      const r = await fetch(url, {
+        signal: AbortSignal.timeout(7000),
+        headers: {
+          'Referer': 'https://www.bezeq.co.il/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Origin': 'https://www.bezeq.co.il',
+          'Accept-Language': 'he-IL,he;q=0.9',
+        }
+      })
+      if (!r.ok) continue
+      const text = await r.text()
+      try {
+        const json = JSON.parse(text)
+        const keys = ['IsAvailable','isAvailable','Available','available','isFiberAvailable','FiberAvailable']
+        for (const k of keys) {
+          if (json[k] === true || json[k] === 'true') return { available: true, checked: true }
+          if (json[k] === false || json[k] === 'false') return { available: false, checked: true }
+        }
+        if (json.data) {
+          for (const k of keys) {
+            if (json.data[k] === true) return { available: true, checked: true }
+            if (json.data[k] === false) return { available: false, checked: true }
+          }
+        }
+      } catch {
+        const t = text.trim().toLowerCase()
+        if (t === 'true' || t === '1') return { available: true, checked: true }
+        if (t === 'false' || t === '0') return { available: false, checked: true }
       }
-    } catch { available = text.trim().toLowerCase() === 'true' }
-    return { available, checked: true, url: 'https://www.bezeq.co.il/internetandphone/internet/bfiber_addresscheck/?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num) }
-  } catch { return { available: false, checked: false, url: 'https://www.bezeq.co.il/internetandphone/internet/bfiber_addresscheck/?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num) } }
+    } catch { continue }
+  }
+  return { available: null, checked: false }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const city = (req.query.city as string) || ''
-  const street = (req.query.street as string) || ''
-  const num = (req.query.num as string) || ''
+  const city = (req.query.city as string || '').trim()
+  const street = (req.query.street as string || '').trim()
+  const num = (req.query.num as string || '').trim()
+
   if (!city || !street) return res.status(400).json({ error: 'Missing city or street' })
-  
-  const bezeq = await checkBezeq(city, street, num)
+
+  res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Cache-Control', 'no-store')
-  res.json({
+
+  const bezeq = await checkBezeq(city, street, num)
+
+  return res.json({
     city, street, num,
     bezeq_available: bezeq.available,
     bezeq_checked: bezeq.checked,
-    providers: [
-      { provider: 'bezeq', available: bezeq.available, url: bezeq.url },
-      { provider: 'hot', available: null, url: 'https://www.hot.net.il/heb/internet/fiber-check/?city=' + enc(city) + '&street=' + enc(street) + '&house=' + enc(num) },
-      { provider: 'cellcom', available: null, url: 'https://cellcom.co.il/sale/jet/internet_ktovet/?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num) },
-      { provider: 'yes', available: null, url: 'https://www.yes.co.il/internet/fiber-address-check/?city=' + enc(city) + '&street=' + enc(street) + '&num=' + enc(num) },
-    ]
+    hot_available: null,
+    partner_available: null,
+    cellcom_available: null,
   })
-}
+              }
